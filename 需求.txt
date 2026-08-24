@@ -1,0 +1,16 @@
+雷池waf的证书免费申请只能使用Let's Encrypt 的 HTTP-01 验证方法 ，但是我防火墙禁止境外ip访问，导致无法通过这种方式申请证书，我想使用acme dns验证获取证书，然后通过调用雷池的api对                              雷池系统内的证书进行新增/删除/更新？
+这是局域网内雷池的API文档和token，提供给你用来了解api功能个定义以及调试
+https://192.168.50.100:9443/swagger/index.html
+9HiXZ2P4SOagGx41q7kOJDmrTkKrVFrD
+
+我想让你帮我做一个容器，该容器使用acme官方程序作为申请证书的工具     （域名平台为cloudflare）
+然后提供一个web页面用来配置申请证书用到的配置，还有雷池api地址、令牌  ，当前证书状态系统状态等查看（要挂载到宿主机目录，避免重置容器丢配置）
+使用python语言实现，提供给我源码 dockerfile，还有dockercompose示例
+对于acme 雷池 cloudflare这些平台具体的工具，请查询官方文档，不要推测和假设
+
+
+
+
+
+
+

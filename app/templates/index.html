@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}总览 - Safeline ACME{% endblock %}
+{% block content %}
+
+<h1>系统总览</h1>
+
+<div class="cards">
+  <div class="card">
+    <h3>雷池 WAF</h3>
+    {% if sl_status.ok %}
+      <p class="ok">✅ 连接正常</p>
+      <p>版本：{{ sl_status.version }}</p>
+    {% elif sl_status.configured %}
+      <p class="err">❌ {{ sl_status.message }}</p>
+    {% else %}
+      <p class="err">⏸ 凭据未配置</p>
+      <p class="muted">在 docker-compose 中设置 SAFELINE_BASE_URL 与 SAFELINE_API_TOKEN 后重启容器</p>
+    {% endif %}
+    {% if sl_status.age is not none %}<p class="muted">检测于 {{ sl_status.age }} 秒前（60 秒缓存）</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Cloudflare DNS</h3>
+    {% if cf_status.ok %}
+      <p class="ok">✅ {{ cf_status.message }}</p>
+    {% elif cf_status.configured %}
+      <p class="err">❌ {{ cf_status.message }}</p>
+    {% else %}
+      <p class="err">⏸ 凭据未配置</p>
+      <p class="muted">在 docker-compose 中设置 CF_TOKEN（或 CF_KEY+CF_EMAIL）后重启容器</p>
+    {% endif %}
+    <p class="muted">用于 DNS 验证（dns_cf 插件）</p>
+    {% if cf_status.age is not none %}<p class="muted">检测于 {{ cf_status.age }} 秒前（60 秒缓存）</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <h3>acme.sh</h3>
+    {% if acme_installed %}
+      <p class="ok">✅ 已安装</p>
+    {% else %}
+      <p class="err">❌ 未安装（容器启动时自动安装）</p>
+    {% endif %}
+    <p class="muted">证书将通过 DNS 验证自动签发/续期</p>
+  </div>
+
+  <div class="card">
+    <h3>定时调度</h3>
+    {% if cfg.schedule.enabled %}
+      <p class="ok">✅ 已启用</p>
+      <p>检查间隔：{{ cfg.schedule.check_interval_hours }} 小时</p>
+    {% else %}
+      <p class="err">⏸ 已停用</p>
+    {% endif %}
+    <p class="muted">上次检查：{{ certs_status.last_run or '从未' }}</p>
+  </div>
+</div>
+
+<h2>托管证书</h2>
+{% if certs_status.certs %}
+<table class="table">
+  <thead>
+    <tr><th>证书</th><th>域名</th><th>雷池证书 ID</th><th>状态</th><th>到期时间</th><th>剩余天数</th><th>最近结果</th></tr>
+  </thead>
+  <tbody>
+    {% for c in certs_status.certs %}
+    <tr>
+      <td><strong>{{ c.name }}</strong></td>
+      <td>{{ c.domains | join('<br>') | safe }}</td>
+      <td>{{ c.safeline_id or '未指定(新建)' }}</td>
+      <td>
+        {% if not c.enabled %}<span class="badge">停用</span>
+        {% elif c.has_cert %}<span class="badge badge-ok">已签发</span>
+        {% else %}<span class="badge badge-warn">未签发</span>{% endif %}
+      </td>
+      <td>{{ c.expiry or '-' }}</td>
+      <td>
+        {% if c.days_left is not none %}
+          {% if c.days_left < 0 %}<span class="err">已过期</span>
+          {% elif c.days_left < 30 %}<span class="warn">{{ c.days_left }} 天</span>
+          {% else %}{{ c.days_left }} 天{% endif %}
+        {% else %}-{% endif %}
+      </td>
+      <td>
+        {% if c.last_result %}
+          <span class="{{ 'ok' if c.last_result.ok else 'err' }}">
+            {{ '✓' if c.last_result.ok else '✗' }} {{ c.last_result.message }}<br>
+            <small class="muted">{{ c.last_result.time }}</small>
+          </span>
+        {% else %}-{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">尚未配置托管证书，请到「配置」页添加。</p>
+{% endif %}
+
+<div class="actions">
+  <button class="btn btn-primary" onclick="runAll(false)">执行一次续期 + 推送</button>
+  <button class="btn" onclick="runAll(true)">强制续期 + 推送</button>
+</div>
+<div id="run-all-result" class="alert" style="display:none"></div>
+
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}证书管理 - Safeline ACME{% endblock %}
+{% block content %}
+
+<h1>证书管理</h1>
+
+<h2>托管域名（acme.sh + 雷池同步）</h2>
+{% if managed.certs %}
+<table class="table">
+  <thead>
+    <tr><th>证书</th><th>域名</th><th>雷池 ID</th><th>状态</th><th>到期</th><th>剩余</th><th>最近结果</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    {% for c in managed.certs %}
+    <tr>
+      <td><strong>{{ c.name }}</strong></td>
+      <td>{{ c.domains | join(', ') }}</td>
+      <td>{{ c.safeline_id or '0(新建)' }}</td>
+      <td>
+        {% if not c.enabled %}<span class="badge">停用</span>
+        {% elif c.has_cert %}<span class="badge badge-ok">已签发</span>
+        {% else %}<span class="badge badge-warn">未签发</span>{% endif %}
+      </td>
+      <td>{{ c.expiry or '-' }}</td>
+      <td>{% if c.days_left is not none %}
+        {% if c.days_left < 0 %}<span class="err">已过期</span>{% elif c.days_left < 30 %}<span class="warn">{{ c.days_left }} 天</span>{% else %}{{ c.days_left }} 天{% endif %}
+      {% else %}-{% endif %}</td>
+      <td>
+        {% if c.last_result %}
+          <span class="{{ 'ok' if c.last_result.ok else 'err' }}">
+            {{ '✓' if c.last_result.ok else '✗' }} {{ c.last_result.message }}<br>
+            <small class="muted">{{ c.last_result.time }}</small>
+          </span>
+        {% else %}-{% endif %}
+      </td>
+      <td class="actions-cell">
+        {% if c.has_cert %}
+        <button class="btn btn-sm btn-primary" onclick="renewCert('{{ c.name }}')">续期+推送</button>
+        {% else %}
+        <button class="btn btn-sm btn-primary" onclick="renewCert('{{ c.name }}')">申请+推送</button>
+        {% endif %}
+        <button class="btn btn-sm btn-danger" onclick="deleteCertEntry('{{ c.name }}')">删除域名</button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">尚未配置托管域名，请到「配置」页添加。</p>
+{% endif %}
+
+<h2>雷池中的证书（只读）</h2>
+{% if sl_error %}<div class="alert alert-error">❌ {{ sl_error }}</div>{% endif %}
+<table class="table">
+  <thead>
+    <tr><th>ID</th><th>域名</th><th>类型</th><th>颁发者</th><th>到期</th><th>被站点引用</th></tr>
+  </thead>
+  <tbody>
+    {% for c in sl_certs %}
+    <tr>
+      <td>{{ c.id }}</td>
+      <td>{{ c.domains | join(', ') }}</td>
+      <td>
+        {% if c.type == 2 %}手动{% elif c.type == 3 %}ACME{% else %}类型{{ c.type }}{% endif %}
+      </td>
+      <td>{{ c.issuer }}</td>
+      <td>{{ c.valid_before }}</td>
+      <td>
+        {% if c.related_sites %}{{ c.related_sites | join(', ') }}
+        {% else %}<span class="muted">无</span>{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">未获取到证书列表（未配置雷池或连接失败）</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div id="result" class="alert" style="display:none"></div>
+
+{% endblock %}

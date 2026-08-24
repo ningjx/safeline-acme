@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}日志 - Safeline ACME{% endblock %}
+{% block content %}
+
+<h1>任务日志</h1>
+<div class="actions">
+  <button class="btn btn-sm" onclick="refreshLogs()">刷新</button>
+</div>
+<pre id="log-view" class="log-view">{% for log in logs %}[{{ log.time }}] [{{ log.level }}] {{ log.message }}
+{% endfor %}</pre>
+
+{% endblock %}

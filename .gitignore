@@ -1,0 +1,10 @@
+# 运行数据（含敏感 Token，勿提交）
+data/
+testdata/
+
+# 构建产物（镜像导出包，可随时重建）
+dist/
+
+# Python 缓存
+__pycache__/
+*.pyc

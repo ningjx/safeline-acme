@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}配置 - Safeline ACME{% endblock %}
+{% block content %}
+
+<h1>系统配置</h1>
+
+<h2>敏感凭据（只读展示，由 docker-compose 环境变量提供）</h2>
+<div class="card">
+  <table class="table">
+    <tr><th>凭据</th><th>环境变量</th><th>状态</th></tr>
+    <tr>
+      <td>雷池 API 地址</td><td><code>SAFELINE_BASE_URL</code></td>
+      <td>{% if sl_env.base_url %}<span class="ok">✅ 已配置</span>{% else %}<span class="err">❌ 未配置</span>{% endif %}</td>
+    </tr>
+    <tr>
+      <td>雷池 API Token</td><td><code>SAFELINE_API_TOKEN</code></td>
+      <td>{% if sl_env.api_token %}<span class="ok">✅ 已配置（不回显）</span>{% else %}<span class="err">❌ 未配置</span>{% endif %}</td>
+    </tr>
+    <tr>
+      <td>Cloudflare 凭据（三种方案任选其一）</td>
+      <td>
+        ① <code>CF_TOKEN</code> + <code>CF_ACCOUNT_ID</code>（API Token 多 Zone）<br>
+        ② <code>CF_TOKEN</code> + <code>CF_ZONE_ID</code>（API Token 单 Zone，免 Account ID）<br>
+        ③ <code>CF_KEY</code> + <code>CF_EMAIL</code>（老式 Global API Key）
+      </td>
+      <td>
+        {% if credentials_ok %}<span class="ok">✅ 已配置</span>{% else %}<span class="err">❌ 未配置完整</span>{% endif %}
+      </td>
+    </tr>
+  </table>
+  <p class="muted">修改方式：编辑 docker-compose.yml 的 environment 段后 <code>docker compose up -d</code> 重启容器。
+  密钥只存在容器环境变量中，Web 页面无法查看、无法修改，也不会写入磁盘。</p>
+  <button type="button" class="btn" onclick="testSafeline()">测试雷池连接</button>
+  <span id="sl-test-result"></span>
+  <button type="button" class="btn" onclick="testCloudflare()">测试 Cloudflare 连接</button>
+  <span id="cf-test-result"></span>
+</div>
+
+<form method="post" id="config-form">
+  <h2>1. ACME 申请参数</h2>
+  <div class="form-grid">
+    <div class="field">
+      <label>注册邮箱</label>
+      <input type="email" name="acme_email" value="{{ cfg.acme.email }}" placeholder="you@example.com">
+      <small>用于 CA 账号注册与到期提醒（example.com 等保留域名会被 CA 拒绝）</small>
+    </div>
+    <div class="field">
+      <label>CA 服务商</label>
+      <select name="acme_ca_server">
+        <option value="letsencrypt" {% if cfg.acme.ca_server == 'letsencrypt' %}selected{% endif %}>Let's Encrypt</option>
+        <option value="zerossl" {% if cfg.acme.ca_server == 'zerossl' %}selected{% endif %}>ZeroSSL</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>密钥类型</label>
+      <select name="acme_keylength">
+        <option value="ec-256" {% if cfg.acme.keylength == 'ec-256' %}selected{% endif %}>ECC P-256（推荐）</option>
+        <option value="ec-384" {% if cfg.acme.keylength == 'ec-384' %}selected{% endif %}>ECC P-384</option>
+        <option value="2048" {% if cfg.acme.keylength == '2048' %}selected{% endif %}>RSA 2048</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>HTTP 代理（可选）</label>
+      <input type="text" name="acme_proxy" value="{{ cfg.acme.proxy }}" placeholder="http://127.0.0.1:7890">
+      <small>如需访问境外 CA/Cloudflare 的加速代理（非敏感项，可留空）</small>
+    </div>
+  </div>
+
+  <h2>2. 定时调度</h2>
+  <div class="form-grid">
+    <div class="field">
+      <label class="checkbox"><input type="checkbox" name="schedule_enabled" {% if cfg.schedule.enabled %}checked{% endif %}> 启用定时续期</label>
+    </div>
+    <div class="field">
+      <label>检查间隔（小时）</label>
+      <input type="number" name="schedule_interval" value="{{ cfg.schedule.check_interval_hours }}" min="1" max="168">
+    </div>
+    <div class="field">
+      <label>提前续期天数</label>
+      <input type="number" name="schedule_renew_days" value="{{ cfg.schedule.renew_days_before_expiry }}" min="1" max="90">
+      <small>证书剩余天数低于该值时触发续期</small>
+    </div>
+  </div>
+
+  <h2>3. 托管域名（保存后自动申请；也可在「证书管理」页手动申请/续期/删除）</h2>
+  <p class="muted">每行一个证书：acme.sh 按「域名」申请（支持泛域名），成功后推送到雷池指定证书 ID。<br>
+  雷池证书 ID 为 0 时在雷池新建证书（需到站点重新选择）；填写已有 ID 则直接更新，站点不停服。<br>
+  ✅ 保存配置后会立即在后台自动申请未签发的证书，稍后在「证书管理」页查看结果。<br>
+  ⚠ 删除域名会一并删除本地 acme.sh 证书；已被推送到雷池的证书需在雷池后台手动删除。</p>
+  <div id="cert-rows">
+    {% for c in cfg.certs %}
+    <div class="cert-row">
+      <input type="text" name="cert_name" value="{{ c.name }}" placeholder="主域名（如 example.com）" class="w1" pattern="[a-zA-Z0-9][a-zA-Z0-9\-]*(\.[a-zA-Z0-9][a-zA-Z0-9\-]*)+">
+      <input type="text" name="cert_domains" value="{{ c.domains | join(',') }}" placeholder="证书覆盖域名，逗号分隔（如 example.com,*.example.com）" class="w2">
+      <input type="number" name="cert_safeline_id" value="{{ c.safeline_id }}" placeholder="雷池证书ID(0=新建)" class="w3" min="0">
+      <label class="checkbox"><input type="checkbox" name="cert_enabled" {% if c.enabled %}checked{% endif %}>启用</label>
+      <button type="button" class="btn btn-danger btn-sm" onclick="removeCertRow(this)">移除本行</button>
+    </div>
+    {% endfor %}
+  </div>
+  <button type="button" class="btn" onclick="addCertRow()">+ 添加域名</button>
+
+  <div class="actions">
+    <button type="submit" class="btn btn-primary">保存配置</button>
+    <a class="btn" href="{{ url_for('index') }}">返回</a>
+  </div>
+</form>
+<div id="result" class="alert" style="display:none"></div>
+
+{% endblock %}

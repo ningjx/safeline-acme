@@ -1,0 +1,30 @@
+services:
+  safeline-acme:
+    build: .
+    container_name: safeline-acme
+    restart: unless-stopped
+    ports:
+      - "8080:8080"          # Web 管理界面（局域网内可直连访问）
+    volumes:
+      - ./data:/data         # 配置/状态/acme.sh 数据，挂载到宿主机，容器重建不丢
+    environment:
+      - TZ=Asia/Shanghai
+      # ===== 敏感凭据（只存在于容器环境变量，Web 不可见、不落盘）=====
+      # 雷池 OPEN API 地址与 Token（个人中心 → OPEN API 生成）
+      - SAFELINE_BASE_URL=https://192.168.50.100:9443
+      - SAFELINE_API_TOKEN=在此填写你的雷池API Token
+      # Cloudflare 凭据（三种方案任选其一，参考 README「获取 Cloudflare 凭据」）
+      # 方案一（推荐）：API Token + Account ID
+      - CF_TOKEN=在此填写你的Cloudflare API Token
+      - CF_ACCOUNT_ID=在此填写你的Cloudflare Account ID
+      # 方案二：API Token 限制到单个 Zone 时，可改用 Zone ID（免填 Account ID）
+      # - CF_ZONE_ID=
+      # 方案三：老式 Global API Key + 邮箱（替代上面两个变量）
+      # - CF_KEY=
+      # - CF_EMAIL=
+      # 可选：雷池管理端口如果配置了受信任的正式证书，可置 1 开启严格校验（默认 0 不校验自签证书）
+      # - SAFELINE_VERIFY_SSL=0
+    network_mode: bridge
+    # 若希望直接访问宿主机上的雷池地址（如 https://192.168.50.100:9443），
+    # 无需额外配置；如需容器共享宿主机网络，可改用：
+    # network_mode: host

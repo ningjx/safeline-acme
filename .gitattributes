@@ -1,0 +1,5 @@
+# 换行符规范：shell 脚本与 Dockerfile 必须保持 LF，
+# 否则在 Linux 容器里会出现 /bin/sh\r 之类的执行错误
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf

@@ -142,13 +142,23 @@ def main():
     assert mock4b.issue_calls == [("example.com", True)], mock4b.issue_calls
     assert mock4b.renew_calls == [], mock4b.renew_calls
 
-    # 场景4c：SAN 与配置完全一致 -> 不重新签发
+    # 场景4c：现有证书 SAN 与配置精确一致（含泛域名）-> 不重新签发
     mock4c = MockAcme(datetime.now(timezone.utc) + timedelta(days=80), crt_p, key_p,
-                      sans={"example.com"})   # 配置 [example.com, *.example.com] 规范化后同为 {example.com}
+                      sans={"example.com", "*.example.com"})   # 配置 [example.com, *.example.com] 精确覆盖
     runner = TaskRunner(cfg, StateManager(), acme=mock4c)
     runner.renew_and_push(cert, force=False)
-    print("场景4c(SAN一致):", mock4c.issue_calls, mock4c.renew_calls)
+    print("场景4c(SAN精确一致):", mock4c.issue_calls, mock4c.renew_calls)
     assert mock4c.issue_calls == [] and mock4c.renew_calls == [], (mock4c.issue_calls, mock4c.renew_calls)
+
+    # 场景4d：现有证书只有 example.com，配置新增泛域名 *.example.com -> 必须重新签发
+    # （回归验证：此前剥离 *. 前缀比对会漏掉「缺泛域名」，导致永远不重新签发）
+    mock4d = MockAcme(datetime.now(timezone.utc) + timedelta(days=80), crt_p, key_p,
+                      sans={"example.com"})
+    runner = TaskRunner(cfg, StateManager(), acme=mock4d)
+    runner.renew_and_push(cert, force=False)
+    print("场景4d(缺泛域名):", mock4d.issue_calls)
+    assert mock4d.issue_calls == [("example.com", True)], mock4d.issue_calls
+    assert mock4d.renew_calls == [], mock4d.renew_calls
 
     # 场景5：定时调度停用 -> 周期检查跳过；wake 保存配置后的 force 检查仍执行
     cfg5 = ConfigManager()

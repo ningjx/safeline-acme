@@ -76,6 +76,10 @@ environment:
   - CF_ACCOUNT_ID=你的Cloudflare Account ID
   # 可选：- CF_ZONE_ID=单Zone时可指定
   # 可选：- SAFELINE_VERIFY_SSL=1（给雷池配了受信任正式证书时才开启）
+  # 可选：Web 界面登录（HTTP Basic Auth），默认免登录；置 1 后需填用户名/密码
+  #       - WEB_AUTH_ENABLED=1
+  #       - WEB_AUTH_USERNAME=admin
+  #       - WEB_AUTH_PASSWORD=请设置强密码
 ```
 
 ### 4. 构建并启动
@@ -85,9 +89,9 @@ cd safeline_acme
 docker compose up -d --build
 ```
 
-### 5. 打开管理界面（局域网直接访问，无登录）
+### 5. 打开管理界面（局域网访问，默认免登录）
 
-访问 `http://<宿主机IP>:8080`：
+访问 `http://<宿主机IP>:8080`（若启用了 `WEB_AUTH_ENABLED=1`，浏览器会弹出登录框）：
 
 1. **配置页**（只展示凭据状态，密钥不可见；可点「测试雷池连接」「测试 Cloudflare 连接」）：
    - ACME 注册邮箱、CA（Let's Encrypt / ZeroSSL）、密钥类型
@@ -105,13 +109,18 @@ docker compose up -d --build
 
 ## Web 权限模型（重要）
 
-- **无登录，局域网内直接访问**，但页面整体为**只读展示**
+- **默认免登录**（适合可信局域网），页面整体为**只读展示**
 - 允许的写操作只有三种：
   1. **新增域名**（配置页保存托管域名列表）
   2. **续期**（单个域名「续期+推送」/ 总览页「执行一次续期+推送」）
   3. **删除域名**（移除托管条目 + 删除本地 acme.sh 证书；雷池侧证书请在雷池后台删除）
 - 不存在任何能读取文件内容、环境变量或任意路径的接口；所有域名输入均做格式校验，拒绝路径穿越字符（`/`、`\`、`..`、空白等）
 - 「证书管理」页底部展示雷池中的全部证书，仅供查看（含被哪些站点引用）
+- **可选登录**：设置 `WEB_AUTH_ENABLED=1` 并配置 `WEB_AUTH_USERNAME` / `WEB_AUTH_PASSWORD` 后，
+  除健康检查接口（`/health`、`/ready`）外的所有页面与 API 均需 HTTP Basic Auth
+  （凭据只存在于容器环境变量，不落盘；用户名密码用常数时间比对）
+- **健康检查**：`GET /health` 返回存活状态，`GET /ready` 返回 acme/雷池/Cloudflare 配置状态；
+  纯只读、无需鉴权，可直接用于 Docker healthcheck 或 Uptime Kuma 等监控
 
 ## 目录结构
 
@@ -186,7 +195,7 @@ CA（Let's Encrypt）拒绝 `example.com` 等保留域名的联系邮箱，请�
 删除域名只清理本工具侧（配置 + acme.sh 本地证书）。雷池侧证书请登录雷池后台解除站点引用后手动删除（防止误删正在使用的证书）。
 
 **Q: Web 不设密码安全吗？**
-面向受信任的局域网使用。凭据（Token/密钥）完全不会出现在 Web 与磁盘配置中，Web 被探测时最多触发续期/删除域名操作。如需公网暴露，请自行加反向代理 + 认证。
+默认面向受信任的局域网使用。凭据（Token/密钥）完全不会出现在 Web 与磁盘配置中，Web 被探测时最多触发续期/删除域名操作。如需公网暴露或更严格的内网环境，请设置 `WEB_AUTH_ENABLED=1` 启用登录，并搭配反向代理 + TLS。
 
 ## 安全提示
 

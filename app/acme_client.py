@@ -238,15 +238,19 @@ class AcmeClient:
             return None
 
     def cert_sans(self, cert_path):
-        """解析证书 SAN 中的 DNS 域名集合（不含通配符前缀），失败返回 None
+        """解析证书 SAN 中的完整 DNS 域名集合（保留通配符前缀），失败返回 None
 
-        用于比对「配置的域名列表」与「现有证书实际覆盖的域名」是否一致
+        用于比对「配置的域名列表」与「现有证书实际覆盖的域名」是否一致。
+        必须保留 *. 前缀做精确比对：example.com 与 *.example.com 是两种不同覆盖，
+        若剥离前缀，把配置新增的 *.example.com 加到只有 example.com 的旧证书上时会
+        被误判为「已一致」，导致永远不重新签发（见 tasks.py 的域名变更检测）。
+        注意 *.example.com 不覆盖 a.b.example.com，此方法返回原始 SAN，不做隐含覆盖。
         """
         try:
             with open(cert_path, "rb") as f:
                 cert = x509.load_pem_x509_certificate(f.read(), default_backend())
             ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-            return {name.lstrip("*.") for name in ext.value.get_values_for_type(x509.DNSName)}
+            return set(ext.value.get_values_for_type(x509.DNSName))
         except Exception:
             return None
 

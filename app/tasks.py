@@ -15,12 +15,16 @@ class TaskRunner:
         self.state = state
         self.acme = acme or AcmeClient()
         self._log = log or state.add_log
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()    # 全局锁：只用于互斥「整轮调度」，不保护单个域名任务
         self._stop = threading.Event()
         self._wake = threading.Event()   # 配置保存后唤醒调度，立刻处理新域名
         self._thread = None
         self._last_run = None
         self._running = False
+        # 按托管域名的可重入锁：同域名的手动续期/定时续期/删除互相串行，
+        # 不同域名仍可并行（acme.sh 对同一域名并发操作会竞争证书目录与状态文件）
+        self._domain_locks = {}
+        self._domain_locks_guard = threading.Lock()
 
     # ---------- 日志 ----------
 
@@ -48,13 +52,33 @@ class TaskRunner:
                 h.update(chunk)
         return h.hexdigest()
 
+    def _domain_lock(self, name):
+        """获取某托管域名的可重入锁。同域名任务互斥，不同域名互不影响。"""
+        with self._domain_locks_guard:
+            lock = self._domain_locks.get(name)
+            if lock is None:
+                lock = threading.RLock()
+                self._domain_locks[name] = lock
+            return lock
+
+    def _drop_domain_lock(self, name):
+        """域名被删除后清理其锁对象，避免配置反复增删时锁表无限增长"""
+        with self._domain_locks_guard:
+            self._domain_locks.pop(name, None)
+
     # ---------- 单个证书：申请/续期 + 推送 ----------
 
     def renew_and_push(self, cert, force=False):
         """对单个托管证书执行 申请/续期 -> 推送雷池。
 
-        返回 (ok, message, detail)
+        同一托管域名在任意路径（手动续期 / 后台调度 / run-all）下都串行执行，
+        防止与 acme.sh 并发操作同一证书目录。返回 (ok, message, detail)。
         """
+        with self._domain_lock(cert["name"]):
+            return self._renew_and_push(cert, force=force)
+
+    def _renew_and_push(self, cert, force=False):
+        """renew_and_push 的实际执行体；调用方必须已持有该域名的 _domain_lock"""
         name = cert["name"]
         domains = cert.get("domains") or [name]
         cfg = self.config.get()
@@ -83,11 +107,13 @@ class TaskRunner:
             renew_days = cfg["schedule"].get("renew_days_before_expiry", 30)
             if days is not None and days < renew_days:
                 need_renew = True
-            # 域名变更检测：SAN 不一致时必须按新列表重新签发（否则永远拿不到新增的泛域名等）
+            # 域名变更检测：SAN 不一致时必须按新列表重新签发（否则永远拿不到新增的泛域名等）。
+            # 必须精确比对（不剥 *. 前缀）：example.com 与 *.example.com 是不同的覆盖集合，
+            # 否则「给只有 example.com 的证书新增 *.example.com」会被误判为一致而跳过。
             if not need_renew:
                 actual = self.acme.cert_sans(fc_path)
                 if actual is not None:
-                    wanted = {d.lstrip("*.") for d in domains}
+                    wanted = set(domains)
                     if actual != wanted:
                         domains_changed = True
                         need_renew = True
@@ -269,37 +295,39 @@ class TaskRunner:
 
         注意：不会删除雷池中已推送的证书（需在雷池后台手动删除）。
         """
-        from .utils import is_valid_cert_name
-        if not is_valid_cert_name(name):
-            return False, "非法的域名格式"
-        cert = self.config.get_cert(name)
-        if cert is None:
-            return False, f"托管证书 {name} 不存在"
+        with self._domain_lock(name):
+            from .utils import is_valid_cert_name
+            if not is_valid_cert_name(name):
+                return False, "非法的域名格式"
+            cert = self.config.get_cert(name)
+            if cert is None:
+                return False, f"托管证书 {name} 不存在"
 
-        # 1. 删除 acme.sh 本地证书（含 conf 与证书文件）；从未签发过则直接跳过
-        keylength = self.config.get()["acme"].get("keylength", "ec-256")
-        fc, _ = self.acme.cert_files(name, keylength)
-        acme_error = None
-        if fc:
-            try:
-                self.acme.remove(name)
-                self._info(f"[{name}] 已删除 acme.sh 本地证书")
-            except AcmeError as e:
-                acme_error = str(e)
-                self._error(f"[{name}] 删除 acme.sh 证书失败: {e}")
-        else:
-            self._info(f"[{name}] 本地无证书文件，跳过 acme.sh 删除")
+            # 1. 删除 acme.sh 本地证书（含 conf 与证书文件）；从未签发过则直接跳过
+            keylength = self.config.get()["acme"].get("keylength", "ec-256")
+            fc, _ = self.acme.cert_files(name, keylength)
+            acme_error = None
+            if fc:
+                try:
+                    self.acme.remove(name)
+                    self._info(f"[{name}] 已删除 acme.sh 本地证书")
+                except AcmeError as e:
+                    acme_error = str(e)
+                    self._error(f"[{name}] 删除 acme.sh 证书失败: {e}")
+            else:
+                self._info(f"[{name}] 本地无证书文件，跳过 acme.sh 删除")
 
-        # 2. 从配置移除
-        self.config.remove_cert(name)
+            # 2. 从配置移除
+            self.config.remove_cert(name)
 
-        # 3. 清理运行状态（推送哈希与结果）
-        self.state.remove_name(name)
+            # 3. 清理运行状态（推送哈希与结果）与该域名的锁对象
+            self.state.remove_name(name)
+            self._drop_domain_lock(name)
 
-        if acme_error:
-            return False, f"配置已移除，但删除 acme.sh 证书失败: {acme_error}"
-        self._info(f"[{name}] 托管域名已删除")
-        return True, f"已删除托管域名 {name}"
+            if acme_error:
+                return False, f"配置已移除，但删除 acme.sh 证书失败: {acme_error}"
+            self._info(f"[{name}] 托管域名已删除")
+            return True, f"已删除托管域名 {name}"
 
     # ---------- 状态 ----------
 

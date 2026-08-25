@@ -6,22 +6,58 @@
 - Web 为局域网只读展示，仅允许三个写操作：新增域名（保存配置）、续期、删除域名
 - 所有域名类输入均做严格格式校验，杜绝路径穿越读取容器内文件
 """
+import hmac
 import os
 import threading
 import time
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 
 from .config import ConfigManager, StateManager
 from .acme_client import AcmeClient
 from .cloudflare import test_connection as test_cloudflare_connection
 from .safeline import SafelineClient, SafelineError
-from .secrets import get_safeline, get_cloudflare, secrets_configured
+from .secrets import get_safeline, get_cloudflare, cloudflare_configured, secrets_configured
 from .tasks import TaskRunner
 from .utils import is_valid_cert_name, is_valid_domain, sanitize_domains
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "safeline-acme")
+
+# ---------- 可选 Web 鉴权（HTTP Basic Auth） ----------
+# 默认不开启，保持局域网免登录体验；设置 WEB_AUTH_ENABLED=1 后，除 /health、/ready
+# 之外的所有页面与 API 都要求 Basic Auth（凭据走环境变量，不落盘）。
+# 注意：Basic Auth 开启后同源页面也会自动带凭据访问 /static 资源，属正常行为。
+WEB_AUTH_ENABLED = os.environ.get("WEB_AUTH_ENABLED", "0") == "1"
+WEB_AUTH_USERNAME = os.environ.get("WEB_AUTH_USERNAME", "")
+WEB_AUTH_PASSWORD = os.environ.get("WEB_AUTH_PASSWORD", "")
+_AUTH_FREE_PATHS = {"/health", "/ready"}
+
+
+def _auth_ok(user, password):
+    """常数时间比对用户名/密码，避免时序侧信道"""
+    if not (WEB_AUTH_USERNAME and WEB_AUTH_PASSWORD):
+        return False
+    return (hmac.compare_digest(user or "", WEB_AUTH_USERNAME)
+            and hmac.compare_digest(password or "", WEB_AUTH_PASSWORD))
+
+
+@app.before_request
+def _check_web_auth():
+    """启用鉴权时，除健康检查路径外所有请求都要求 Basic Auth"""
+    if not WEB_AUTH_ENABLED:
+        return None
+    if request.path in _AUTH_FREE_PATHS:
+        return None
+    auth = request.authorization
+    if not auth or not _auth_ok(auth.username, auth.password):
+        return Response(
+            "Authentication required",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Safeline ACME"'},
+        )
+    return None
+
 
 config = ConfigManager()
 state = StateManager()
@@ -39,6 +75,33 @@ def inject_globals():
         "sl_env": sl,
         "credentials_ok": secrets_configured(),
     }
+
+
+# ---------- 健康检查（给 Docker healthcheck / Uptime Kuma / K8s 探针使用） ----------
+# 这两个接口始终免鉴权（见 _AUTH_FREE_PATHS），且不含任何敏感信息
+
+@app.route("/health")
+def health():
+    """存活探针：进程活着即返回 ok"""
+    return jsonify({"status": "ok"})
+
+
+@app.route("/ready")
+def ready():
+    """就绪探针：返回组件配置状态供观测。
+
+    注意「未配置」也算 ready——探针缺配置就报不健康会导致容器反复重启，
+    是否配置齐全应由监控侧（日志/告警）判断，而不是让容器进入 crash loop。
+    """
+    cfg = config.get()
+    sl = get_safeline()
+    return jsonify({
+        "status": "ok",
+        "acme_installed": acme.installed,
+        "safeline_configured": bool(sl.get("base_url") and sl.get("api_token")),
+        "cloudflare_configured": cloudflare_configured(),
+        "schedule_enabled": cfg["schedule"].get("enabled", True),
+    })
 
 
 # ---------- 状态缓存（主页秒开：远程检测放在后台线程，60 秒内复用结果） ----------

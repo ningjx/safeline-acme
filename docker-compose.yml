@@ -5,6 +5,12 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"          # Web 管理界面（局域网内可直连访问）
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     volumes:
       - ./data:/data         # 配置/状态/acme.sh 数据，挂载到宿主机，容器重建不丢
     environment:
@@ -24,6 +30,11 @@ services:
       # - CF_EMAIL=
       # 可选：雷池管理端口如果配置了受信任的正式证书，可置 1 开启严格校验（默认 0 不校验自签证书）
       # - SAFELINE_VERIFY_SSL=0
+      # 可选：Web 管理界面启用登录（HTTP Basic Auth）。默认 0 免登录（仅建议可信局域网使用）；
+      # 置 1 后需同时填写下面的用户名/密码，除 /health、/ready 外所有页面/接口都要鉴权
+      # - WEB_AUTH_ENABLED=0
+      # - WEB_AUTH_USERNAME=admin
+      # - WEB_AUTH_PASSWORD=请设置强密码
     network_mode: bridge
     # 若希望直接访问宿主机上的雷池地址（如 https://192.168.50.100:9443），
     # 无需额外配置；如需容器共享宿主机网络，可改用：
